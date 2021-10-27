@@ -1,0 +1,231 @@
+---
+title: 'Project 1: Wrangling, Exploration, Visualization'
+author: "SDS322E"
+date: 'Friday, October 29, 2021'
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+
+library(tidyverse)
+library(readxl)
+library(gt)
+```
+
+## Data Wrangling, Exploration, Visualization
+
+### John Matthew Mason, jmm22836
+
+#### Introduction 
+
+You can learn a lot about a person based on how much they drink alcohol.  Even though worldwide alcohol consumption has increased by nearly 70% between 1990 and 2017 ([source](https://www.medicalnewstoday.com/articles/325135#Steep-increase-in-alcohol-consumption)), drinking remains taboo among ultra-traditionalist and ultra-religious groups.  These same groups tend to lean politically conservative, raising an interesting question: **is there any correlation between alcohol consumption and voting preference?**  I expect to see that there is a correlation, however I am not sure which political party is likely to consume more/less alcohol.
+
+To explore this question, I selected two datasets containing county-level election results and alcohol consumption metrics in the state of California.  I chose to use data from 2008 since this was the most recent election year with complete data in both categories.
+
+##### Data Sources
+
+My data is a subset of the following datasets, acquired by filtering to the state of California and to the year 2008.
+
+| Dataset Name | Source | Link |
+| --- | --- | --- |
+| Election | theguardian.com | [Click here](https://www.theguardian.com/news/datablog/2009/mar/02/us-elections-2008) |
+| Alcohol | healthdata.org | [Click here](http://ghdx.healthdata.org/record/ihme-data/united-states-alcohol-use-prevalence-county-2002-2012) |
+
+##### Variables
+
+My raw data contains the following variables.
+
+| Dataset | Variable Name | Type | Description |
+| --- | --- | --- | --- |
+| Election | County | Categorical | Name of county |
+| Election | Obama | Integer | Number of votes for Barack Obama |
+| Election | McCain | Integer | Number of votes for John McCain |
+| Election | Other | Integer | Number of votes for other candidates |
+| Alcohol | State | Categorical | State name |
+| Alcohol | Location | Categorical | Name of county |
+| Alcohol | 2008 Both Sexes | Integer | Percent of residents who match category* |
+| Alcohol | 2008 Females | Integer | Percent of female residents who match category* |
+| Alcohol | 2008 Males | Integer | Percent of male residents who match category* |
+
+*Alcohol data is divided into three categories: (1) any drinking, (2) heavy drinking, and (3) binge drinking.  Data is separated into three sheets by category in Alcohol_California_2008.xlsx.
+
+##### Loading Data
+
+```{R}
+election_results <- read_excel('/Users/masonma/Desktop/SDS322E_Project1/ElectionResults_California_2008.xlsx')
+
+any_drinks <- read_excel('/Users/masonma/Desktop/SDS322E_Project1/Alcohol_California_2008.xlsx', sheet='Any')
+heavy_drinks <- read_excel('/Users/masonma/Desktop/SDS322E_Project1/Alcohol_California_2008.xlsx', sheet='Heavy')
+binge_drinks <- read_excel('/Users/masonma/Desktop/SDS322E_Project1/Alcohol_California_2008.xlsx', sheet='Binge')
+```
+
+#### Tidying, Reshaping, and Wrangling
+
+##### Preparing the Alcohol Use Data
+
+The alcohol use data is divided into three tables based on category of use.  We need to combine these tables into one table for analysis.  For each table, I have renamed the columns to indicate which gender and category they correspond to.  Next, I joined the three tables together.  The resulting table is wide, so I have used pivot-longer to coearce each observation into its own row.
+
+```{R}
+any_drinks <- any_drinks %>% rename('Both'='2008 Both Sexes', 'Female'='2008 Females', 'Male'='2008 Males') %>%
+  rename_with( ~paste0(.x, "_Any"), .cols=c(-"Location", -'State'))
+
+heavy_drinks <- heavy_drinks %>% rename('Both'='2008 Both Sexes', 'Female'='2008 Females', 'Male'='2008 Males') %>%
+  rename_with( ~paste0(.x, "_Heavy"), .cols=c(-"Location", -'State'))
+
+binge_drinks <- binge_drinks %>% rename('Both'='2008 Both Sexes', 'Female'='2008 Females', 'Male'='2008 Males') %>%
+  rename_with( ~paste0(.x, "_Binge"), .cols=c(-"Location", -'State'))
+
+drinks_raw <- any_drinks %>% full_join(heavy_drinks) %>% full_join(binge_drinks)
+
+drinks <- drinks_raw %>% pivot_longer(cols=c(3:11), names_to="Metric", values_to="Value") %>%
+  separate(Metric, into=c('Gender', 'Category'), sep='_') %>% 
+  mutate(County=word(Location, 1, -2)) %>% select(-Location)
+```
+
+##### Preparing the Election Data
+
+The election data is already tidy, however I need to normalize the results so that they can be compared across counties.  To do this, I have created new columns `Dem`, `Rep`, and `Other` which contain the proportion of the population who voted for each party.  Based on this data, I calculated and created a new column `Result` which represents which party won that county in 2008.
+
+```{R}
+get_winner <- function(dem, rep, other){
+  if(max(dem, rep, other)==dem){
+    return('Dem')
+  } else if(max(dem, rep, other) == rep) {
+    return('Rep')
+  } else {
+    return('Other')
+  }
+}
+
+election_results_tidy <- election_results %>%
+  mutate(Dem=Obama/(Obama+McCain+Other), Rep=McCain/(Obama+McCain+Other), Other=Other/(Obama+McCain+Other)) %>%
+  select(-McCain, -Obama)
+
+election_results_tidy <- election_results_tidy %>% mutate(Result=apply(election_results_tidy, 1, function(y) get_winner(y['Dem'],y['Rep'],y['Other'])))
+```
+
+#### Joining/Merging
+
+I have joined the two datasets on the common ID variable `County`.  I decided to use an inner join so our joined dataset only contains counties which appear in both input datasets.  Since all counties appear in both input datasets, we do not lose any counties in this join.  After the join, we have 522 unique observations of 9 variables.  This is the same number of rows as the `drinks` dataset and the total number of unique columns between `drinks` and `election_results`.
+
+```{R}
+californians <- drinks %>% inner_join(election_results_tidy, by='County')
+glimpse(californians)
+```
+
+#### Summary Statistics
+
+```{R}
+californians %>% select(County) %>% unique() %>% summarize(Counties=n()) %>% gt()
+```
+
+```{r}
+election_columns = c('Dem', 'Rep', 'Other')
+californians %>%
+  summarize_at(election_columns, c(~mean(.), ~sd(.), ~min(.), ~max(.))) %>%
+  pivot_longer(cols=c(1:12), names_to='Metric', values_to='Value') %>%
+  separate(Metric, into=c('Result', 'Metric'), sep='_') %>%
+  pivot_wider(names_from='Metric', values_from='Value') %>%
+  gt() %>% tab_header(title='Summary statistics', subtitle='Grouped by result')
+```
+
+```{r}
+californians %>% group_by(Category) %>% summarize_at('Value', c(~mean(.), ~sd(.), ~min(.), ~max(.))) %>% gt() %>% tab_header(title='Summary statistics', subtitle='Grouped by category')
+```
+
+
+```{r}
+californians %>% group_by(Result) %>% summarize(N=n()) %>% gt() %>% tab_header(title='Number of datapoints', subtitle='Grouped by result')
+```
+
+```{r}
+californians %>% summarize_all(~sum(is.na(.))) %>% gt() %>% tab_header(title='Null values by column')
+```
+
+I chose to calculate the mean, standard deviation, minimum, and maximum for each of the quantitative variables in my dataset.  I also chose to calculate the number of unique counties to validate the integrity of my data and the number of datapoints in for each election result.  
+  
+From this data, it is clear that more counties voted for the Democratic candidate in 2008. Additionally, we can use the standard deviations calculated to see that the distribution of alcohol consumption decreases as the degree of drinking increases.
+
+#### Exploratory Data Analysis
+
+```{r}
+californians %>% filter(Category=='Any', Gender=='Both') %>% filter(Value > quantile(Value, probs=1-.25)) %>% group_by(Result) %>% summarize(Counties=n()) %>% gt()
+```
+
+Of counties in the top 25% for any drinking, 11 voted for the Democrat candidate and 4 voted for the Republican candidate.
+
+```{r}
+californians %>% filter(Category=='Any', Gender=='Both') %>% filter(Value < quantile(Value, probs=.25)) %>% group_by(Result) %>% summarize(Counties=n()) %>% gt()
+```
+
+Of the counties in the bottom 25% for any drinking, 9 voted for the Republican candidate and 6 voted for the Democrat candidate.
+
+```{R}
+californians %>% filter(Gender=='Both') %>% group_by(Result, Category) %>% slice_max(Value) %>% select(Result, Category, County, Value)
+```
+The counties with the maximum prevalence of drinking in each category, separated election result.  Notice that the counties who voted Democrat have a higher prevalence of any drinking compared to the Republican counties.
+
+#### Visualization
+
+```{R}
+californians %>%
+  ggplot(aes(x=Value)) + 
+  geom_histogram(aes(y=..density.., fill=Category)) + 
+  geom_density(alpha=.5) +
+  facet_wrap(~Category) + xlim(0, 100) +
+  xlab('Percent of Population') + ylab('Density') + ggtitle('Distribution of alcohol use in California counties by category') + theme_bw()
+```
+This visualization reveals two important facts about alcohol use in California:  
+• As the degree of alcohol use increases, the average percent of the population which falls into that category decreases.  This is to be expected since an individual in either the Binge or Heavy drinking category also falls into the previous category(ies).  
+• As the degree of alcohol use increases, the distribution of the percent of the population which fall into each category decreases.  This means you will find a larger variation in prevalence of any alcohol consumption across counties, but will find only a small variation in heavy alcohol consumption across counties.
+
+```{R}
+californians %>% filter(Gender!='Both') %>%
+  ggplot(aes(x=Gender, y=Value)) +
+  geom_boxplot(aes(color=Gender)) +
+  stat_summary(fun=mean, geom='point', shape=23, size=4) +
+  facet_wrap(~Category) + ylim(0, 100) +
+  ylab('Percent of Population') + ggtitle('Drinking in California counties by Gender') + theme_bw()
+```
+
+This visualization supports the observations made in the previous figure and reveals new and interesting information.  
+• We see that the range of the percent of population becomes more narrow as the degree of alcohol consumption increases.  This supports the conclusion that you will find a larger variation in prevalence of any alcohol consumption across counties, but will find only a small variation in heavy alcohol consumption across counties.  
+• We also can observe that across all degrees of drinking, Men tend to be more likely to consume alcohol than Women although the gap narrows as the degree of drinking increases.
+
+```{R}
+californians %>%
+  filter(Gender=='Both') %>%
+  ggplot(aes(x=Rep, y=Value)) +
+  geom_point(aes(color=Result)) +
+  geom_smooth(method='lm', formula= y~x) +
+  facet_wrap(~Category) + xlim(0, 1) + 
+  xlab('Proportion of population who vote Republican') + ylab('Percent of population who consume alcohol') + 
+  ggtitle('Prevalence of drinking in California counties') + theme_bw()
+```
+
+This visualization reveals the correlation between alcohol consumption and political affiliation.  
+• There is a clear inverse relationship between the percent of the population who consume alcohol and the proportion of the population who vote Republican.  
+• As the degree of drinking increases, this correlation becomes significantly weaker.
+
+#### Concluding Remarks
+
+Through my research and analysis I wanted to answer this question: **Is there any correlation between alcohol consumption and voting preference?**
+
+My analysis supports the conclusion that counties which consume more alcohol are more likely to vote for a Democrat candidate.  Conversely, counties which consume less alcohol are more likely to vote for a Republican candidate.  However, as the degree of alcohol consumption increases this correlation becomes weaker.
+
+##### Other Research
+My conclusion is supported by a number of studies which reached similar conclusions.  
+• [One study](http://journals.cambridge.org/action/displayAbstract?fromPage=online&aid=9149185&fulltextType=RA&fileId=S1931436113000230) reveals that liberal ideology has a statistically significant positive association with the consumption of alcohol in the United States.  
+• [Another study](https://www.independent.co.uk/news/world/americas/what-your-favourite-drink-says-about-your-political-beliefs-chart-shows-alcohol-preferred-by-voters-9033924.html) suggests that your choice of drink is also correlated with political ideology.
+
+
+
